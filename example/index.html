@@ -1,0 +1,343 @@
+<html>
+
+<head>
+<title>Deformed image example</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<script type="text/javascript" src="glMatrix-0.9.5.min.js"></script>
+<script type="text/javascript" src="deform-grid.js"></script>
+<script type="text/javascript" src="webgl-utils.js"></script>
+
+<script id="shader-fs" type="x-shader/x-fragment">
+
+precision mediump float;
+
+varying vec2 vTextureCoord;
+
+uniform sampler2D uSampler;
+
+void main(void) {
+  vec4 textureColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+  gl_FragColor = textureColor;
+}
+
+</script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+
+attribute vec2 aVertexPosition;
+attribute vec2 aTextureCoord;
+
+uniform mat4 uMVMatrix;
+uniform mat4 uPMatrix;
+
+varying vec2 vTextureCoord;
+
+void main(void) {
+  gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 0.0, 1.0);
+  vTextureCoord = aTextureCoord;
+}
+
+</script>
+
+
+<script type="text/javascript">
+
+var gl;
+
+function initGL(canvas) {
+  try {
+    gl = WebGLUtils.setupWebGL(canvas);
+    gl.viewportWidth = canvas.width;
+    gl.viewportHeight = canvas.height;
+  } catch (e) {
+  }
+  
+  if (!gl) {
+    alert("Could not initialise WebGL, sorry :-(");
+  }
+}
+
+
+function getShader(gl, id) {
+  var shaderScript = document.getElementById(id);
+  if (!shaderScript) {
+    return null;
+  }
+
+  var str = "";
+  var k = shaderScript.firstChild;
+  while (k) {
+    if (k.nodeType == 3) {
+      str += k.textContent;
+    }
+
+    k = k.nextSibling;
+  }
+
+  var shader;
+  if (shaderScript.type == "x-shader/x-fragment") {
+    shader = gl.createShader(gl.FRAGMENT_SHADER);
+  } else if (shaderScript.type == "x-shader/x-vertex") {
+    shader = gl.createShader(gl.VERTEX_SHADER);
+  } else {
+    return null;
+  }
+
+  gl.shaderSource(shader, str);
+  gl.compileShader(shader);
+
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    alert(gl.getShaderInfoLog(shader));
+    return null;
+  }
+
+  return shader;
+}
+
+
+var shaderProgram;
+
+function initShaders() {
+  var fragmentShader = getShader(gl, "shader-fs");
+  var vertexShader = getShader(gl, "shader-vs");
+
+  shaderProgram = gl.createProgram();
+  gl.attachShader(shaderProgram, vertexShader);
+  gl.attachShader(shaderProgram, fragmentShader);
+  gl.linkProgram(shaderProgram);
+
+  if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+    alert("Could not initialise shaders");
+  }
+
+  gl.useProgram(shaderProgram);
+
+  shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+  gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+  shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+  gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+
+  shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+  shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+  shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+}
+
+
+function handleLoadedTexture(texture) {
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texture.image);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+  gl.generateMipmap(gl.TEXTURE_2D);
+
+  gl.bindTexture(gl.TEXTURE_2D, null);
+}
+
+
+var glassTexture;
+
+function initTexture() {
+  glassTexture = gl.createTexture();
+  glassTexture.image = new Image();
+  glassTexture.image.onload = function () {
+    handleLoadedTexture(glassTexture)
+  }
+
+  glassTexture.image.src = "glass.gif";
+}
+
+
+var mvMatrix = mat4.create();
+var mvMatrixStack = [];
+var pMatrix = mat4.create();
+
+function mvPushMatrix() {
+  var copy = mat4.create();
+  mat4.set(mvMatrix, copy);
+  mvMatrixStack.push(copy);
+}
+
+function mvPopMatrix() {
+  if (mvMatrixStack.length == 0) {
+    throw "Invalid popMatrix!";
+  }
+        
+  mvMatrix = mvMatrixStack.pop();
+}
+
+function setMatrixUniforms() {
+  gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+  gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+}
+
+
+function degToRad(degrees) {
+  return degrees * Math.PI / 180;
+}
+
+var xPos = 0;
+var yPos = 0;
+
+var cameraPos = [0.0, 0.0, -5.0];
+
+var currentlyPressedKeys = {};
+
+function handleKeyDown(event) {
+  currentlyPressedKeys[event.keyCode] = true;
+}
+
+function handleKeyUp(event) {
+  currentlyPressedKeys[event.keyCode] = false;
+}
+
+
+function handleKeys() {
+  if (currentlyPressedKeys[37]) {
+    // Left cursor key
+    xPos -= 1;
+  }
+  if (currentlyPressedKeys[39]) {
+    // Right cursor key
+    xPos += 1;
+  }
+  if (currentlyPressedKeys[38]) {
+    // Up cursor key
+    yPos -= 1;
+  }
+  if (currentlyPressedKeys[40]) {
+    // Down cursor key
+    yPos += 1;
+  }
+}
+
+var gridVertexPositionBuffer;
+var gridVertexTextureCoordBuffer;
+var gridVertexIndexBuffer;
+var grid;
+
+function initBuffers() {
+  grid = Deform_grid(-0.5, -0.5, 1.0, 1.0, 0.1);
+
+  gridVertexPositionBuffer = gl.createBuffer();
+  gridVertexTextureCoordBuffer = gl.createBuffer();
+  gridVertexIndexBuffer = gl.createBuffer();
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, gridVertexTextureCoordBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(grid.textureCoords), gl.STATIC_DRAW);
+  gridVertexTextureCoordBuffer.itemSize = 2;
+  gridVertexTextureCoordBuffer.numItems = grid.textureCoords.length / 2;
+
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gridVertexIndexBuffer);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(grid.indices), gl.STATIC_DRAW);
+  gridVertexIndexBuffer.itemSize = 1;
+  gridVertexIndexBuffer.numItems = grid.indices.length / 1;
+
+}
+
+function updateBuffers() {
+  // Update deforming.
+  var baseCoords = [
+    -0.5, -0.5,
+    0.5, -0.5,
+    0.0, 0.5,
+  ];
+  var controlCoords = [
+    -0.5, -0.5,
+    0.5, -0.5,
+    0.0 + xPos * 0.1, 0.5 + -yPos * 0.1,
+  ];
+  Deform_compute(baseCoords, controlCoords, grid);
+
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, gridVertexPositionBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(grid.vertices), gl.STATIC_DRAW);
+  gridVertexPositionBuffer.itemSize = 2;
+  gridVertexPositionBuffer.numItems = grid.vertices.length / 2;
+}
+
+
+function drawScene() {
+  gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+
+  mat4.identity(mvMatrix);
+
+  mat4.translate(mvMatrix, cameraPos);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, gridVertexPositionBuffer);
+  gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, gridVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, gridVertexTextureCoordBuffer);
+  gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, gridVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, glassTexture);
+  gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+  gl.enable(gl.DEPTH_TEST);
+
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gridVertexIndexBuffer);
+  setMatrixUniforms();
+  gl.drawElements(gl.TRIANGLES, gridVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+}
+
+
+var lastTime = 0;
+
+function animate() {
+  var timeNow = new Date().getTime();
+  if (lastTime != 0) {
+    var elapsed = timeNow - lastTime;
+  }
+
+  lastTime = timeNow;
+}
+
+
+function tick() {
+  requestAnimFrame(tick);
+  handleKeys();
+  updateBuffers();
+  drawScene();
+  animate();
+}
+
+
+
+function webGLStart() {
+  var canvas = document.getElementById("lesson08-canvas");
+  initGL(canvas);
+  initShaders();
+  initBuffers();
+  initTexture();
+
+  gl.clearColor(0.0, 0.0, 0.0, 1.0);
+  gl.enable(gl.DEPTH_TEST);
+
+  document.onkeydown = handleKeyDown;
+  document.onkeyup = handleKeyUp;
+
+  tick();
+}
+
+</script>
+
+
+</head>
+
+
+<body onload="webGLStart();">
+    <canvas id="lesson08-canvas" style="border: none;" width="500" height="500"></canvas>
+
+	<br />
+    (Press up, right, down and left on keyboard to control pivot)
+    
+</body>
+
+</html>
